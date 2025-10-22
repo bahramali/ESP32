@@ -1,0 +1,38 @@
+{
+  "system": "S01",
+  "layer": "L01",
+  "deviceId": "G01",
+  "compositeId": "S01-L01-G01",
+  "timestamp": "2025-10-21T19:19:35Z",
+  "sensors": [
+    {
+      "sensorName": "SHT3x",
+      "sensorType": "temperature",
+      "value": 22.56,
+      "unit": "°C"
+    },
+    {
+      "sensorName": "SHT3x",
+      "sensorType": "humidity",
+      "value": 54.2,
+      "unit": "%"
+    },
+    {
+      "sensorName": "VEML7700",
+      "sensorType": "light",
+      "value": 492.5952,
+      "unit": "lux"
+    },
+    {
+      "sensorName": "DS18B20",
+      "sensorType": "temperature",
+      "value": 21.3125,
+      "unit": "°C"
+    }
+  ],
+  "health": {
+    "sht3x": true,
+    "veml7700": true,
+    "ds18b20": true
+  }
+}
