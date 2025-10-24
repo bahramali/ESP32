@@ -3,12 +3,12 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 #include "Adafruit_VEML7700.h"
+#include "Adafruit_SHT31.h"
 #include <SparkFun_AS7343.h>
 #include <time.h>
 #include <esp_system.h>
 #include <ArduinoJson.h>
 #include <SensirionI2cScd4x.h>
-#include "Adafruit_SHT31.h"
 
 // =========================
 // WiFi / MQTT CONFIG
@@ -34,28 +34,32 @@ const char* SYSTEM_ID = "S01";
 #define I2C_SCL 9
 
 // =========================
-// GLOBALS & OBJECTS
+// GLOBAL OBJECTS
 // =========================
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-Adafruit_SHT31    sht3x = Adafruit_SHT31();
-Adafruit_VEML7700 veml7700;
-SensirionI2cScd4x scd4x;
-AS7343            as7343;
+Adafruit_VEML7700  veml7700;
+Adafruit_SHT31     sht3x = Adafruit_SHT31();
+SfeAS7343ArdI2C    as7343;        // SparkFun AS7343 (I2C)
+SensirionI2cScd4x  scd41;         // Sensirion SCD41 (CO₂)
 
-bool shtOnline  = false;
-bool luxOnline  = false;
-bool scdOnline  = false;
-bool asOnline   = false;
+bool sht3xOnline = false;
+bool vemlOnline  = false;
+bool as7343Online= false;
+bool scd41Online = false;
 
-// Diagnostics
+// Diagnostic counters
 unsigned long failedConnections = 0;
 unsigned long failedSends = 0;
 unsigned long disconnectedCounter = 0;
 
+// CO₂ last valid reading
+static uint16_t lastCo2Ppm = 0;
+static bool     co2HasValue = false;
+
 // =========================
-// HELPERS
+// HELPER FUNCTIONS
 // =========================
 bool checkI2CDevice(uint8_t address) {
   Wire.beginTransmission(address);
@@ -66,7 +70,8 @@ void setup_wifi() {
   Serial.print("Connecting to WiFi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
-    delay(400); Serial.print(".");
+    delay(400);
+    Serial.print(".");
   }
   Serial.println("\nWiFi connected.");
   Serial.print("IP: "); Serial.println(WiFi.localIP());
@@ -109,11 +114,11 @@ void mqttReconnect() {
   }
 }
 
-void addSensor(JsonArray& arr, const char* name, const char* type, float value, const char* unit) {
+void addSensor(JsonArray& arr, const char* sensorName, const char* sensorType, float value, const char* unit) {
   if (!isValidNumber(value)) return;
   JsonObject o = arr.createNestedObject();
-  o["sensorName"] = name;
-  o["sensorType"] = type;
+  o["sensorName"] = sensorName;
+  o["sensorType"] = sensorType;
   o["value"]      = value;
   o["unit"]       = unit;
 }
@@ -122,59 +127,59 @@ void addSensor(JsonArray& arr, const char* name, const char* type, float value, 
 // BUILD PAYLOAD
 // =========================
 size_t buildPayload(char* out, size_t cap,
-                    const char* systemId, const char* deviceId, const char* layer,
+                    const char* systemId,
+                    const char* deviceId,
+                    const char* layer,
                     const String& timestamp,
-                    bool shtOK, bool luxOK, bool scdOK, bool asOK,
-                    float t_sht, float rh_sht,
-                    float lux,
-                    float co2ppm,
-                    AS7343& as) {
+                    bool shtOnline, bool vemlOnlineNow, bool asOnline, bool scdOnline,
+                    float temp, float hum, float lux, float co2ppm,
+                    const uint16_t ch[14]) {
 
   StaticJsonDocument<8192> doc;
 
+  // ---- Metadata
   doc["system"]      = systemId;
   doc["layer"]       = layer;
   doc["deviceId"]    = deviceId;
   doc["compositeId"] = buildCompositeId(systemId, layer, deviceId);
   doc["timestamp"]   = timestamp;
 
+  // ---- Sensors
   JsonArray sensors = doc.createNestedArray("sensors");
 
-  if (shtOK) {
-    addSensor(sensors, "SHT3x", "temperature", t_sht, "°C");
-    addSensor(sensors, "SHT3x", "humidity",    rh_sht, "%");
+  // SHT3x temperature + humidity
+  if (shtOnline) {
+    addSensor(sensors, "SHT3x", "temperature", temp, "°C");
+    addSensor(sensors, "SHT3x", "humidity",    hum,  "%");
   }
 
-  if (scdOK) {
+  // CO₂ (SCD41)
+  if (scdOnline) {
     addSensor(sensors, "SCD41", "co2", co2ppm, "ppm");
   }
 
-  // ---- AS7343 all channels as individual readings
-  if (asOK) {
-    if (as.readAllChannels()) {
-      struct {
-        const char* name; as7343_channel_t ch;
-      } chans[] = {
-        {"405nm", AS7343_CHANNEL_F1}, {"425nm", AS7343_CHANNEL_F2},
-        {"450nm", AS7343_CHANNEL_F3}, {"475nm", AS7343_CHANNEL_F4},
-        {"515nm", AS7343_CHANNEL_F5}, {"550nm", AS7343_CHANNEL_F6},
-        {"555nm", AS7343_CHANNEL_F7}, {"600nm", AS7343_CHANNEL_F8},
-        {"640nm", AS7343_CHANNEL_F9}, {"690nm", AS7343_CHANNEL_F10},
-        {"745nm", AS7343_CHANNEL_F11},{"VIS1",  AS7343_CHANNEL_CLEAR},
-        {"VIS2",  AS7343_CHANNEL_F12},{"NIR855",AS7343_CHANNEL_NIR}
-      };
-
-      for (auto& c : chans) {
-        addSensor(sensors, "AS7343", c.name, (float)as.getChannel(c.ch), "raw");
-      }
+  // AS7343 – all 14 channels as separate entries
+  if (asOnline) {
+    const char* bands[14] = {
+      "405nm","425nm","450nm","475nm","515nm","550nm","555nm",
+      "600nm","640nm","690nm","745nm","VIS1","VIS2","NIR855"
+    };
+    for (int i = 0; i < 14; i++) {
+      addSensor(sensors, "AS7343", bands[i], (float)ch[i], "raw");
     }
   }
 
+  // VEML7700 light intensity
+  if (vemlOnlineNow) {
+    addSensor(sensors, "VEML7700", "light", lux, "lux");
+  }
+
+  // ---- Health flags
   JsonObject health = doc.createNestedObject("health");
-  health["sht3x"]   = shtOK;
-  health["veml7700"]= luxOK;
-  health["as7343"]  = asOK;
-  health["scd41"]   = scdOK;
+  health["sht3x"]    = shtOnline;
+  health["veml7700"] = vemlOnlineNow;
+  health["as7343"]   = asOnline;
+  health["scd41"]    = scdOnline;
 
   return serializeJson(doc, out, cap);
 }
@@ -190,28 +195,39 @@ void setup() {
   setup_time();
   client.setServer(mqtt_server, mqtt_port);
   client.setKeepAlive(30);
-  client.setBufferSize(8192);
+  client.setBufferSize(8192); // large enough for full JSON payload
 
-  shtOnline = checkI2CDevice(0x44) && sht3x.begin(0x44);
-  luxOnline = checkI2CDevice(0x10) && veml7700.begin();
+  // ---- Initialize SHT3x
+  sht3xOnline = checkI2CDevice(0x44) && sht3x.begin(0x44);
 
-  if (checkI2CDevice(0x62)) {
-    scd4x.begin(Wire);
-    scd4x.stopPeriodicMeasurement();
-    uint16_t err = scd4x.startPeriodicMeasurement();
-    scdOnline = (err == 0);
+  // ---- Initialize VEML7700
+  vemlOnline  = checkI2CDevice(0x10) && veml7700.begin();
+
+  // ---- Initialize AS7343
+  if (checkI2CDevice(0x39)) {
+    as7343Online = as7343.begin(0x39, Wire);
+    if (as7343Online) {
+      as7343.powerOn(true);
+      as7343.setAutoSmux(AUTOSMUX_18_CHANNELS);
+      as7343.enableSpectralMeasurement(true);
+      // Optional tuning for bright light:
+      //as7343.setGain(AS7343_GAIN_1X);
+      //as7343.setIntTime(10);
+    }
   }
 
-  asOnline = as7343.begin(Wire);
-  if (asOnline) {
-    as7343.setSMUXCommand(SMUX_20_60);
-    as7343.setMeasurementTime(10);
-    as7343.setGain(AS7343_GAIN_1X);
+  // ---- Initialize SCD41 (CO₂)
+  scd41Online = checkI2CDevice(0x62);
+  if (scd41Online) {
+    scd41.begin(Wire, 0x62);
+    scd41.stopPeriodicMeasurement();
+    delay(500);
+    scd41.startPeriodicMeasurement();
   }
 }
 
 // =========================
-// LOOP
+// MAIN LOOP
 // =========================
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -221,40 +237,67 @@ void loop() {
   if (!client.connected()) mqttReconnect();
   client.loop();
 
-  bool shtOK = shtOnline && checkI2CDevice(0x44);
-  bool luxOK = luxOnline && checkI2CDevice(0x10);
-  bool scdOK = scdOnline && checkI2CDevice(0x62);
-  bool asOK  = asOnline;
+  bool shtOK = checkI2CDevice(0x44) && sht3xOnline;
+  bool vemlOK= checkI2CDevice(0x10) && vemlOnline;
+  bool asOK  = checkI2CDevice(0x39) && as7343Online;
+  bool scdOK = checkI2CDevice(0x62) && scd41Online;
 
   String timestamp = getTimeISO8601();
 
-  float t_sht=NAN, rh_sht=NAN, lux=NAN, co2ppm=NAN;
+  float temp = NAN, hum = NAN, lux = NAN;
+  uint16_t ch[14] = {0};
 
+  // ---- Read SHT3x
   if (shtOK) {
-    t_sht = sht3x.readTemperature();
-    rh_sht = sht3x.readHumidity();
+    temp = sht3x.readTemperature();
+    hum  = sht3x.readHumidity();
   }
 
-  if (luxOK) {
+  // ---- Read VEML7700
+  if (vemlOK) {
     lux = veml7700.readLux();
   }
 
-  if (scdOK) {
-    uint16_t co2; float t_dummy, rh_dummy;
-    if (scd4x.readMeasurement(co2, t_dummy, rh_dummy) == 0 && co2 != 0) {
-      co2ppm = co2;
-    }
+  // ---- Read AS7343 spectral data
+  if (asOK) {
+    as7343.readSpectraDataFromSensor();
+    ch[0]  = as7343.getChannelData(CH_PURPLE_F1_405NM);
+    ch[1]  = as7343.getChannelData(CH_DARK_BLUE_F2_425NM);
+    ch[2]  = as7343.getChannelData(CH_BLUE_FZ_450NM);
+    ch[3]  = as7343.getChannelData(CH_LIGHT_BLUE_F3_475NM);
+    ch[4]  = as7343.getChannelData(CH_BLUE_F4_515NM);
+    ch[5]  = as7343.getChannelData(CH_GREEN_F5_550NM);
+    ch[6]  = as7343.getChannelData(CH_GREEN_FY_555NM);
+    ch[7]  = as7343.getChannelData(CH_ORANGE_FXL_600NM);
+    ch[8]  = as7343.getChannelData(CH_BROWN_F6_640NM);
+    ch[9]  = as7343.getChannelData(CH_RED_F7_690NM);
+    ch[10] = as7343.getChannelData(CH_DARK_RED_F8_745NM);
+    ch[11] = as7343.getChannelData(CH_VIS_1);
+    ch[12] = as7343.getChannelData(CH_VIS_2);
+    ch[13] = as7343.getChannelData(CH_NIR_855NM);
   }
 
+  // ---- Read SCD41 (CO₂)
+  if (scdOK) {
+    bool ready = false;
+    if (scd41.getDataReadyStatus(ready) == 0 && ready) {
+      uint16_t ppm = 0; float t_dummy = 0, r_dummy = 0;
+      if (scd41.readMeasurement(ppm, t_dummy, r_dummy) == 0 && ppm > 0) {
+        lastCo2Ppm  = ppm;
+        co2HasValue = true;
+      }
+    }
+  }
+  float co2Value = (scdOK && co2HasValue) ? (float)lastCo2Ppm : 0.0f;
+
+  // ---- Build and publish JSON payload
   char buffer[8192];
   size_t n = buildPayload(buffer, sizeof(buffer),
                           SYSTEM_ID, DEVICE_ID, LAYER,
                           timestamp,
-                          shtOK, luxOK, scdOK, asOK,
-                          t_sht, rh_sht,
-                          lux,
-                          co2ppm,
-                          as7343);
+                          shtOK, vemlOK, asOK, scdOK,
+                          temp, hum, lux, co2Value,
+                          ch);
 
   bool ok = client.publish(mqtt_topic, (uint8_t*)buffer, n, false);
   if (ok) {
