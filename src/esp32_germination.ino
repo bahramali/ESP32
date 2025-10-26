@@ -31,8 +31,8 @@ const char* mqtt_topic  = "germinationTopic";
 // DEVICE METADATA
 // =========================
 const char* DEVICE_ID = "G01";
-const char* LAYER     = "L01";
-const char* SYSTEM_ID = "S01";
+const char* LAYER     = "L00";
+const char* SYSTEM_ID = "G01";
 
 // =========================
 // PINS
@@ -165,8 +165,8 @@ size_t buildPayload(char* out, size_t cap,
 
   // HDC302x
   if (hdcOnlineNow) {
-    addSensor(sensors, "HDC302x", "temperature", temp, "°C");
-    addSensor(sensors, "HDC302x", "humidity",    hum,  "%");
+    addSensor(sensors, "HDC302x", "A_Temp_G", temp, "°C");
+    addSensor(sensors, "HDC302x", "A_RH_G",    hum,  "%");
   }
 
   // VEML7700
@@ -176,7 +176,7 @@ size_t buildPayload(char* out, size_t cap,
 
   // DS18B20
   if (dsOnline) {
-    addSensor(sensors, "DS18B20", "temperature", dsTempC, "°C");
+    addSensor(sensors, "DS18B20", "A_Temp_W", dsTempC, "°C");
   }
 
   // health
@@ -244,8 +244,7 @@ void loop() {
       temp = 0.0;
       hum = 0.0;
     // The library exposes simple read helpers:
-      hdc302x.readTemperatureHumidityOnDemand(temp, hum, TRIGGERMODE_LP0);
-
+    hdc302x.readTemperatureHumidityOnDemand(temp, hum, TRIGGERMODE_LP0);
   }
 
   if (vemlOnlineNow) {
