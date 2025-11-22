@@ -1,0 +1,123 @@
+{
+  "system": "S01",
+  "layer": "L01",
+  "deviceId": "C01",
+  "compositeId": "S01-L01-C01",
+  "timestamp": "2025-10-27T22:28:24Z",
+  "sensors": [
+    {
+      "sensorName": "VEML7700",
+      "sensorType": "light",
+      "value": 105.5232,
+      "unit": "lux"
+    },
+    {
+      "sensorName": "SHT3x",
+      "sensorType": "A_Temp_C",
+      "value": 22.49,
+      "unit": "C"
+    },
+    {
+      "sensorName": "SHT3x",
+      "sensorType": "A_RH_C",
+      "value": 54.61,
+      "unit": "%"
+    },
+    {
+      "sensorName": "SCD41",
+      "sensorType": "co2",
+      "value": 1025,
+      "unit": "ppm"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "405nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "425nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "475nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "515nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "550nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "640nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "690nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "745nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "450nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "555nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "600nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "855nm",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "VIS1",
+      "value": 0,
+      "unit": "counts"
+    },
+    {
+      "sensorName": "AS7343",
+      "sensorType": "FD1",
+      "value": 0,
+      "unit": "counts"
+    }
+  ],
+  "health": {
+    "veml7700": true,
+    "sht3x": true,
+    "scd41": true,
+    "as7343": true
+  }
+}

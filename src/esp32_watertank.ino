@@ -26,7 +26,7 @@ const char* SYSTEM_ID      = "S01";
 const char* PUMP_DEVICE_ID = "R01";
 
 // ─────────── Pins / Calibration ───────────
-const int TDS_PIN  = 32;
+const int TDS_PIN  = 35;
 const int TEMP_PIN = 4;    // DS18B20
 const int DO_PIN   = 34;
 
@@ -114,7 +114,8 @@ void mqtt_reconnect() {
     if (client.connect(clientId.c_str())) {
       Serial.println("connected.");
     } else {
-      Serial.print("MQTT failed, rc="); Serial.print(client.state());
+      Serial.print("MQTT failed, rc=");
+      Serial.print(client.state());
       Serial.println(" retrying in 2s");
       failedConnections++;
       delay(2000);
