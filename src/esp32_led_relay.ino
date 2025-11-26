@@ -9,8 +9,11 @@ const char* password = "Reza11Reza11";
 
 const char* mqtt_server  = "192.168.8.3";
 const int   mqtt_port    = 1883;
-const char* TOPIC_CMD    = "actuator/led/cmd";    // subscribe
-const char* TOPIC_STATUS = "actuator/led/status"; // publish (retained)
+
+// Commands for all layers
+const char* TOPIC_CMD        = "actuator/led/cmd";       // subscribe
+// Status base; per-layer topics will be: actuator/led/status/L0x
+const char* TOPIC_STATUS_BASE = "actuator/led/status/";  // publish (retained)
 
 /* ===== Target filter (per device) ===== */
 const char* SYSTEM_ID = "S01";
@@ -32,12 +35,12 @@ const char* CHANNEL_LAYER[RELAY_COUNT] = {
 
 const bool RELAY_ACTIVE_HIGH = false; // set false if your module is active-low
 
-/* ===== Schedule (configurable via MQTT JSON) ===== */
-// Default: 05:00 -> ON for 16h
-int gOnHour          = 5;
-int gOnMinute        = 0;
-int gOnSecond        = 0;
-int gOnDurationHours = 16;
+/* ===== Per-layer schedule (configurable via MQTT JSON) ===== */
+// Defaults: 05:00 -> ON for 16h for all layers
+int gOnHour[RELAY_COUNT] = {5, 5, 5, 5};
+int gOnMinute[RELAY_COUNT] = {0, 0, 0, 0};
+int gOnSecond[RELAY_COUNT] = {0, 0, 0, 0};
+int gOnDurationHours[RELAY_COUNT] = {16, 16, 16, 16};
 
 /* ===== Timezone (Europe/Stockholm w/ DST) ===== */
 static const char* TZ_EUROPE_STOCKHOLM = "CET-1CEST,M3.5.0/2,M10.5.0/3";
@@ -89,7 +92,10 @@ static inline int secondsSinceMidnight(const tm& lt) {
 
 bool timeIsValid() { return time(nullptr) > 100000; }
 
-bool scheduleShouldBeOnNow(tm* outLt = nullptr) {
+/* Per-layer schedule check */
+bool scheduleShouldBeOnNow(int idx, tm* outLt = nullptr) {
+  if (idx < 0 || idx >= RELAY_COUNT) return false;
+
   time_t now = time(nullptr);
   if (!timeIsValid()) return false;
 
@@ -97,32 +103,34 @@ bool scheduleShouldBeOnNow(tm* outLt = nullptr) {
   localtime_r(&now, &lt);
   if (outLt) *outLt = lt;
 
-  const int startSec = gOnHour * 3600 + gOnMinute * 60 + gOnSecond;
-  const int endSec   = (startSec + gOnDurationHours * 3600) % (24 * 3600);
+  const int startSec = gOnHour[idx] * 3600 + gOnMinute[idx] * 60 + gOnSecond[idx];
+  const int endSec   = (startSec + gOnDurationHours[idx] * 3600) % (24 * 3600);
   const int nowSec   = secondsSinceMidnight(lt);
 
-  if (gOnDurationHours <= 0) return false;
-  if (gOnDurationHours >= 24) return true;
+  if (gOnDurationHours[idx] <= 0) return false;
+  if (gOnDurationHours[idx] >= 24) return true;
 
   if (endSec > startSec) {
     return (nowSec >= startSec) && (nowSec < endSec);
   } else {
+    // wraps over midnight
     return (nowSec >= startSec) || (nowSec < endSec);
   }
 }
 
-/* Return the next schedule boundary (start or end) as epoch time */
-time_t nextScheduleBoundaryEpoch() {
+/* Return the next schedule boundary (start or end) as epoch time for one layer */
+time_t nextScheduleBoundaryEpoch(int idx) {
+  if (idx < 0 || idx >= RELAY_COUNT) return 0;
   if (!timeIsValid()) return 0;
 
   tm lt;
   time_t now = time(nullptr);
   localtime_r(&now, &lt);
 
-  const int startSec = gOnHour * 3600 + gOnMinute * 60 + gOnSecond;
-  const int endSec   = (startSec + gOnDurationHours * 3600) % (24 * 3600);
+  const int startSec = gOnHour[idx] * 3600 + gOnMinute[idx] * 60 + gOnSecond[idx];
+  const int endSec   = (startSec + gOnDurationHours[idx] * 3600) % (24 * 3600);
   const int nowSec   = secondsSinceMidnight(lt);
-  const bool onNow   = scheduleShouldBeOnNow();
+  const bool onNow   = scheduleShouldBeOnNow(idx);
 
   int targetSec = onNow ? endSec : startSec;
 
@@ -165,7 +173,7 @@ String iso8601Now() {
   return String(buf);
 }
 
-/* Publish status (retained) for single channel */
+/* Publish status (retained) for single channel, per-layer topic */
 void publishStatus(int idx, bool force = false) {
   if (idx < 0 || idx >= RELAY_COUNT) return;
 
@@ -187,22 +195,25 @@ void publishStatus(int idx, bool force = false) {
   doc["layer"]    = CHANNEL_LAYER[idx];
   doc["mode"]     = (currentMode[idx] == MODE_AUTO) ? "AUTO" : "MANUAL";
   doc["state"]    = relayState[idx];
-  doc["outlet"]   = idx; // optional: which relay index
+  doc["outlet"]   = idx; // which relay index
 
   JsonObject sched = doc.createNestedObject("schedule");
-  sched["onHour"]        = gOnHour;
-  sched["onMinute"]      = gOnMinute;
-  sched["durationHours"] = gOnDurationHours;
+  sched["onHour"]        = gOnHour[idx];
+  sched["onMinute"]      = gOnMinute[idx];
+  sched["durationHours"] = gOnDurationHours[idx];
 
   if (timeIsValid()) {
-    time_t nextB = nextScheduleBoundaryEpoch();
+    time_t nextB = nextScheduleBoundaryEpoch(idx);
     if (nextB > 0) doc["nextChangeEpoch"] = (uint32_t)nextB;
     doc["timestamp"] = iso8601Now();
   }
 
   char buf[512];
   size_t n = serializeJson(doc, buf, sizeof(buf));
-  client.publish(TOPIC_STATUS, (const uint8_t*)buf, n, true /* retained */);
+
+  // Build per-layer status topic: actuator/led/status/L0x
+  String topic = String(TOPIC_STATUS_BASE) + CHANNEL_LAYER[idx];
+  client.publish(topic.c_str(), (const uint8_t*)buf, n, true /* retained */);
 }
 
 /* ---------- WiFi / NTP ---------- */
@@ -259,17 +270,18 @@ void mqttReconnect() {
 
 /* Handle incoming commands:
 
-   1) Global schedule:
+   1) Per-layer schedule:
    {
      "system":"S01",
      "deviceId":"R01",
+     "layer":"L02",
      "command":"SET_SCHEDULE",
-     "onHour":5,
-     "onMinute":0,
-     "durationHours":16
+     "onHour":7,
+     "onMinute":15,
+     "durationHours":12
    }
 
-   2) Per-layer:
+   2) Per-layer control:
    {
      "system":"S01",
      "deviceId":"R01",
@@ -290,13 +302,25 @@ void handleCommand(JsonObjectConst root) {
   String c = cmd;
   c.toUpperCase();
 
-  // ---- Global schedule config ----
-  if (c == "SET_SCHEDULE") {
-    int onHour        = root["onHour"]        | gOnHour;
-    int onMinute      = root["onMinute"]      | gOnMinute;
-    int durationHours = root["durationHours"] | gOnDurationHours;
+  const char* layer = root["layer"];
 
-    // Clamp values to safe ranges
+  // SET_SCHEDULE requires a layer
+  if (c == "SET_SCHEDULE") {
+    if (!layer) {
+      Serial.println("[CMD] SET_SCHEDULE missing 'layer'");
+      return;
+    }
+    int idx = channelIndexByLayer(layer);
+    if (idx < 0) {
+      Serial.println("[CMD] SET_SCHEDULE: no matching layer");
+      return;
+    }
+
+    int onHour        = root["onHour"]        | gOnHour[idx];
+    int onMinute      = root["onMinute"]      | gOnMinute[idx];
+    int durationHours = root["durationHours"] | gOnDurationHours[idx];
+
+    // Clamp values
     if (onHour < 0)   onHour = 0;
     if (onHour > 23)  onHour = 23;
     if (onMinute < 0) onMinute = 0;
@@ -304,26 +328,23 @@ void handleCommand(JsonObjectConst root) {
     if (durationHours < 0)  durationHours = 0;
     if (durationHours > 24) durationHours = 24;
 
-    gOnHour          = onHour;
-    gOnMinute        = onMinute;
-    gOnSecond        = 0; // keep seconds at zero
-    gOnDurationHours = durationHours;
+    gOnHour[idx]          = onHour;
+    gOnMinute[idx]        = onMinute;
+    gOnSecond[idx]        = 0; // keep seconds at zero
+    gOnDurationHours[idx] = durationHours;
 
-    Serial.printf("[CMD] New schedule -> %02d:%02d for %d h\n",
-                  gOnHour, gOnMinute, gOnDurationHours);
+    Serial.printf("[CMD] New schedule L=%s -> %02d:%02d for %d h\n",
+                  CHANNEL_LAYER[idx], gOnHour[idx], gOnMinute[idx], gOnDurationHours[idx]);
 
-    // Force re-evaluation for AUTO channels
-    for (int i = 0; i < RELAY_COUNT; ++i) {
-      if (currentMode[i] == MODE_AUTO) {
-        hasDriven[i] = false;   // so loop() will drive based on new schedule
-        publishStatus(i, true); // immediately publish updated schedule/state
-      }
+    // Force re-evaluation for this AUTO channel
+    if (currentMode[idx] == MODE_AUTO) {
+      hasDriven[idx] = false;
+      publishStatus(idx, true);
     }
     return;
   }
 
-  // ---- Per-layer commands (AUTO / ON / OFF) ----
-  const char* layer = root["layer"];
+  // Other commands require a layer too
   if (!layer) {
     return;
   }
@@ -419,7 +440,7 @@ void loop() {
 
     bool desired = relayState[i];
     if (currentMode[i] == MODE_AUTO) {
-      desired = scheduleShouldBeOnNow();
+      desired = scheduleShouldBeOnNow(i);
     }
 
     if (!hasDriven[i] || desired != relayState[i]) {
