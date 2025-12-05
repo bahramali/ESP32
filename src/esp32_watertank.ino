@@ -26,13 +26,13 @@ const char* SYSTEM_ID      = "S01";
 const char* PUMP_DEVICE_ID = "R01";
 
 // ─────────── Pins / Calibration ───────────
-const int TDS_PIN  = 35;
+const int TDS_PIN  = 14;
 const int TEMP_PIN = 4;    // DS18B20
-const int DO_PIN   = 34;
+const int DO_PIN   = 16;
 
 // EZO pH (UART1 on ESP32)
 HardwareSerial EZOph(1);
-const int PH_RX_PIN = 16;  // ESP32 RX  <- EZO TX
+const int PH_RX_PIN = 18;  // ESP32 RX  <- EZO TX
 const int PH_TX_PIN = 17;  // ESP32 TX  -> EZO RX
 const uint32_t PH_BAUD = 9600;
 
